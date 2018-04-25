@@ -16,6 +16,14 @@ import javafx.scene.layout.Priority
 import javafx.scene.layout.VBox
 import javafx.scene.paint.Color
 
+/**
+ * Gets the [Orientation] of a given positional [Side].
+ */
+fun Side.toOrientation()  = when(this) {
+    Side.LEFT, Side.RIGHT -> Orientation.HORIZONTAL
+    Side.TOP, Side.BOTTOM -> Orientation.VERTICAL
+}
+
 fun EventTarget.drawer(
         side: Side = Side.LEFT,
         multiselect: Boolean = false,
@@ -24,6 +32,9 @@ fun EventTarget.drawer(
 ) = Drawer(side, multiselect, floatingContent).attachTo(this, op)
 
 class Drawer(side: Side, multiselect: Boolean, floatingContent: Boolean) : BorderPane() {
+    val dockingOrientationProperty : ObjectProperty<Orientation> = ReadOnlyObjectWrapper(side.toOrientation())
+    val dockingOrientation by dockingOrientationProperty
+
     val dockingSideProperty: ObjectProperty<Side> = SimpleObjectProperty(side)
     var dockingSide by dockingSideProperty
 
@@ -106,6 +117,9 @@ class Drawer(side: Side, multiselect: Boolean, floatingContent: Boolean) : Borde
 
         // Track side property change
         dockingSideProperty.onChange { configureDockingSide() }
+        dockingOrientationProperty.bind(dockingSideProperty.objectBinding {
+            it?.toOrientation()
+        })
 
         // Track button additions/removal
         items.onChange { change ->
