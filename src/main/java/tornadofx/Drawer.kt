@@ -5,7 +5,6 @@ import javafx.beans.value.ObservableValue
 import javafx.collections.FXCollections
 import javafx.event.EventHandler
 import javafx.event.EventTarget
-import javafx.geometry.Bounds
 import javafx.geometry.Orientation
 import javafx.geometry.Side
 import javafx.scene.Cursor
@@ -152,12 +151,9 @@ class Drawer(side: Side, multiselect: Boolean, floatingContent: Boolean, resizab
             }
         }
 
-        val resizeHandler = DrawerResizeEventHandler(this)
-        resizeHandler.bind(parent)
-
         parentProperty().addListener { _, old, new ->
-            resizeHandler.bind(new)
-            resizeHandler.unbind(old)
+            old?.let { DrawerResizeEventHandler.unbind(it, this@Drawer) }
+            new?.let { DrawerResizeEventHandler.bind(new, this@Drawer) }
         }
     }
 
@@ -397,34 +393,23 @@ class DrawerStyles : Stylesheet() {
     }
 }
 
-class DrawerResizeEventHandler(private val drawer: Drawer) : EventHandler<MouseEvent> {
-    private var dragging = false
+// @todo - move drawerspecific logic (i.e. inResizeBounds, isResizable) to `Drawer`
+// now that the listeners are per-parent?
+class DrawerResizeEventHandler(private val parent: Parent) : EventHandler<MouseEvent> {
 
-    /**
-     * Bind this event handlers filters to the given [parent] node.
-     */
-    fun bind(parent: Parent?) {
-        RESIZE_EVENT_TYPES.forEach { parent?.addEventFilter(it, this) }
-    }
-
-    /**
-     * Unbind this event handlers filters from the given [parent] after the
-     * [drawer]s parent node has changed.
-     */
-    fun unbind(oldParent: Parent?) {
-        RESIZE_EVENT_TYPES.forEach { oldParent?.removeEventFilter(it, this) }
-    }
+    internal var dragTarget: Drawer? = null
+    internal val drawers = mutableListOf<Drawer>()
 
     /**
      * Create a 1D line centered on the given [point] with the specified [length].
      */
-    private fun centeredLine(point: Double, length: Double) = (point - length / 2.0) to (point + length / 2.0)
+    private fun centeredLine(point: Double, length: Double) = (point - length / 2.0)..(point + length / 2.0)
 
     /**
      * Checks if the layout coordinates given by [x] and [y] are within bounds of dragging the drawers
      * border to resize it.
      */
-    private fun inResizeBounds(x: Double, y: Double): Boolean {
+    private fun inResizeBounds(drawer: Drawer, x: Double, y: Double): Boolean {
         //@todo - should/can we get this from the border properties?
         val resizeAnchorSize = MINIMUM_RESIZE_ANCHOR_WIDTH.value
 
@@ -433,73 +418,92 @@ class DrawerResizeEventHandler(private val drawer: Drawer) : EventHandler<MouseE
         val layoutX = drawer.layoutX
         val layoutY = drawer.layoutY
 
-        val (x1, x2) = when (drawer.dockingSide) {
+        val horizontalBounds = when (drawer.dockingSide) {
             Side.LEFT -> centeredLine(layoutX + width, resizeAnchorSize)
             Side.RIGHT -> centeredLine(layoutX, resizeAnchorSize)
-            else -> layoutX to layoutX + width
+            else -> layoutX..layoutX + width
         }
 
-        val (y1, y2) = when (drawer.dockingSide) {
+        val verticalBounds = when (drawer.dockingSide) {
             Side.TOP -> centeredLine(layoutY + height, resizeAnchorSize)
             Side.BOTTOM -> centeredLine(layoutY, resizeAnchorSize)
-            else -> layoutY to layoutY + height
+            else -> layoutY..layoutY + height
         }
 
-        return x in x1..x2 && y in y1..y2
+        return x in horizontalBounds && y in verticalBounds
     }
 
     /**
-     * Checks if the target [drawer]'s resizable property is set and if it currently has any
+     * Checks if the target [drawer]'s isResizable property is set and if it currently has any
      * of its content areas expanded.
      */
-    private fun resizable() = drawer.resizable && drawer.items.any { it.expanded }
+    private fun isResizable(drawer: Drawer) = drawer.resizable && drawer.items.any { it.expanded }
 
     /**
      * Gets the _resize_ cursor for the [drawer]s current [Orientation].
      */
-    private fun resizeCursor() = when (drawer.dockingOrientation) {
+    private fun resizeCursor(drawer: Drawer) = when (drawer.dockingOrientation) {
         Orientation.HORIZONTAL -> Cursor.H_RESIZE
         Orientation.VERTICAL -> Cursor.V_RESIZE
         else -> Cursor.DEFAULT
     }
 
+    /**
+     * Handle mouse move events and set the cursor to the appropriate _resize_ cursor
+     * when hovering over a [Drawer]s resizable bounds.
+     */
     private fun handleMouseOver(event: MouseEvent) {
-        val resizeCursor = resizeCursor()
-
-        //@todo - need to figure out the best way to reset cursors
-        if (resizable() && inResizeBounds(event.x, event.y)) {
-            drawer.parent.cursor = resizeCursor
+        val target = drawers.firstOrNull { isResizable(it) && inResizeBounds(it, event.x, event.y) }
+        if (target != null) {
             event.consume()
+            parent.cursor = resizeCursor(target)
+        } else {
+            parent.cursor = Cursor.DEFAULT
         }
     }
 
+    /**
+     * Handle a mouse drag event and update the drag target, if any, to use a new
+     * preferred height and width depending on the [Orientation] of the [Drawer].
+     */
     private fun handleResize(event: MouseEvent) {
-        if (dragging) {
+        dragTarget?.let { drawer ->
             event.consume()
+            val side = drawer.dockingSide
+            val newWidth = event.x - drawer.layoutX - if (side == Side.RIGHT) drawer.width else 0.0
+            val newHeight = event.y - drawer.layoutY - if (side == Side.BOTTOM) drawer.height else 0.0
 
-            when (drawer.dockingSide) {
-                Side.LEFT -> drawer.prefWidth = max(0.0, abs(event.x - drawer.layoutX))
-                Side.RIGHT -> drawer.prefWidth = max(0.0, abs(event.x - drawer.layoutX - drawer.width))
-                Side.TOP -> drawer.prefHeight = max(0.0, abs(event.y - drawer.layoutY))
-                Side.BOTTOM -> drawer.prefHeight = max(0.0, abs(event.y - drawer.layoutY - drawer.height))
+            when (drawer.dockingOrientation) {
+                Orientation.HORIZONTAL -> drawer.prefWidth = max(0.0, abs(newWidth))
+                Orientation.VERTICAL -> drawer.prefHeight = max(0.0, abs(newHeight))
             }
         }
     }
 
+    /**
+     * Handle a mouse press and check if there are any [Drawer]s with resizable bounds
+     * on the mouse click position.
+     */
     private fun handleResizeStart(event: MouseEvent) {
-        if (resizable() && inResizeBounds(event.x, event.y)) {
+        val target = drawers.firstOrNull { isResizable(it) && inResizeBounds(it, event.x, event.y) }
+
+        if (target != null) {
             event.consume()
-            dragging = true
-            drawer.parent.cursor = resizeCursor()
+            dragTarget = target
         }
     }
 
+    /**
+     * Handle the release of a mouse button and reset the cursor to the default
+     * and set the [dragTarget] to `null`.
+     */
     private fun handleResizeEnd(event: MouseEvent) {
-        if (dragging) {
+        dragTarget?.let {
             event.consume()
-            dragging = false
-            drawer.parent.cursor = Cursor.DEFAULT
+            parent.cursor = Cursor.DEFAULT
         }
+
+        dragTarget = null
     }
 
     override fun handle(event: MouseEvent) {
@@ -512,8 +516,9 @@ class DrawerResizeEventHandler(private val drawer: Drawer) : EventHandler<MouseE
     }
 
     companion object {
+
         /**
-         * A set of [MouseEvent] types that are listened on to resize [Drawer]s
+         * A set of [MouseEvent] types that are listened on to resize [Drawer]s.
          */
         private val RESIZE_EVENT_TYPES = setOf(
             MouseEvent.MOUSE_DRAGGED,
@@ -522,6 +527,35 @@ class DrawerResizeEventHandler(private val drawer: Drawer) : EventHandler<MouseE
             MouseEvent.MOUSE_RELEASED
         )
 
+        /**
+         * The minimum size of the drag anchor on the border of a [Drawer].
+         */
         private val MINIMUM_RESIZE_ANCHOR_WIDTH = 5.px
+
+        /**
+         * Bind a [DrawerResizeEventHandler] to the [parent], if one is not already attached via properties, and add
+         * the [drawer] to it's list of managed drawers.
+         */
+        fun bind(parent: Parent, drawer: Drawer) {
+            val listener = parent.properties.computeIfAbsent(DrawerResizeEventHandler::class) {
+                DrawerResizeEventHandler(parent).also {
+                    for (eventType in RESIZE_EVENT_TYPES) {
+                        parent.addEventFilter(eventType, it)
+                    }
+                }
+            } as DrawerResizeEventHandler
+
+            listener.drawers.add(drawer)
+        }
+
+        /**
+         * Remove the given [Drawer] from it's old parents list of managed drawers if a resize
+         * event handler exists on it.
+         */
+        fun unbind(oldParent: Parent, drawer: Drawer) {
+            val listener = oldParent.properties[DrawerResizeEventHandler::class] as DrawerResizeEventHandler? ?: return
+            listener.drawers.remove(drawer)
+        }
+
     }
 }
