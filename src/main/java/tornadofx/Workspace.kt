@@ -70,19 +70,19 @@ open class Workspace(title: String = "Workspace", navigationMode: NavigationMode
     private val viewPos = integerBinding(viewStack, dockedComponentProperty) { viewStack.indexOf(dockedComponent) }
 
     val leftDrawer: Drawer
-        get() = (root.left as? Drawer) ?: Drawer(Side.LEFT, false, false).also {
+        get() = (root.left as? Drawer) ?: Drawer(Side.LEFT, false, false, true).also {
             root.left = it
             it.toFront()
         }
 
     val rightDrawer: Drawer
-        get() = (root.right as? Drawer) ?: Drawer(Side.RIGHT, false, false).also {
+        get() = (root.right as? Drawer) ?: Drawer(Side.RIGHT, false, false, true).also {
             root.right = it
             it.toFront()
         }
 
     val bottomDrawer: Drawer
-        get() = (root.bottom as? Drawer) ?: Drawer(Side.BOTTOM, false, false).also {
+        get() = (root.bottom as? Drawer) ?: Drawer(Side.BOTTOM, false, false, true).also {
             root.bottom = it
             it.toFront()
         }
